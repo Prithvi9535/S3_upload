@@ -1,0 +1,102 @@
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+// import { S3 } from "aws-sdk";
+import fs from "fs";
+import util from "util"; // Import the 'util' module for promisification
+import XLSX from "xlsx";
+
+//dynamo dipendency
+import * as ddb from '@aws-sdk/lib-dynamodb';
+import * as dynamodb from '@aws-sdk/client-dynamodb';
+const docClient = new dynamodb.DynamoDBClient();
+
+// Create an S3 client
+const s3Client = new S3Client({
+    region: "us-east-1"
+});
+// Promisify fs.readFile for reading the Excel template (if needed)
+const readFileAsync = util.promisify(fs.readFile);
+
+
+
+
+
+export const query_dynamo = async (params) => {
+    try {
+        const results = await docClient.send(new ddb.QueryCommand(params));
+        return results;
+    }
+    catch (err) {
+        console.log(params);
+        console.error(err);
+    }
+};
+
+
+
+
+
+
+export const handler = async (event) => {
+    console.log(JSON.stringify(event));
+    const bucketName = 'prithvik9535';
+    const excelFileName = 'output_file.xlsx'; // Name for the generated Excel file
+
+
+    let getUserExist = {
+        TableName: "laundry_customers",
+        IndexName: "customer_status-index",
+        KeyConditionExpression: "customer_status = :customer_status",
+        ExpressionAttributeValues: {
+            ":customer_status": "ACTIVE"
+        }
+    };
+
+
+
+    try {
+        
+        
+        const queryResult = await query_dynamo(getUserExist);
+
+        // Extract the relevant data from the query result
+        const records = queryResult.Items;
+        
+        
+        // Create a new workbook
+        const workbook = XLSX.utils.book_new();
+        const worksheet = XLSX.utils.json_to_sheet(records);
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet 1');
+
+        // Create a temporary file path
+        const filePath = '/tmp/generated_excel_file.xlsx';
+
+        // Write the workbook to a temporary file using XLSX.writeFile
+        XLSX.writeFile(workbook, filePath);
+
+        // Read the Excel file from the local file system (if needed)
+        const fileBuffer = await readFileAsync(filePath);
+
+        // Create S3 upload parameters
+        const uploadParams = {
+            Bucket: bucketName,
+            Key: excelFileName,
+            Body: fileBuffer || fs.createReadStream(filePath), // Use fileBuffer if available, else create a read stream
+        };
+
+        // Upload the Excel file to S3
+        const putObjectCommand = new PutObjectCommand(uploadParams);
+        await s3Client.send(putObjectCommand);
+
+        return {
+            statusCode: 200,
+            body: 'Excel file generated and uploaded to S3 successfully',
+        };
+    }
+    catch (error) {
+        return {
+            statusCode: 500,
+            body: `Error uploading to S3: ${error.message}`,
+        };
+    }
+};
+
